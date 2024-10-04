@@ -1,10 +1,33 @@
 from vosk import Model, KaldiRecognizer
 from pydub import AudioSegment
+from transformers import pipeline
 import streamlit as sl
 import soundfile as sf
 import pandas as pd
+import sqlite3
 import json
+import textwrap
 import os
+
+
+
+con = sqlite3.connect("transcripts/transcript.db")
+
+cur = con.cursor()
+
+cur.execute('''
+    CREATE TABLE IF NOT EXISTS transcripts (
+        id INTEGER PRIMARY KEY,
+        filename TEXT NOT NULL,
+        transcript TEXT NOT NULL
+    )
+''')
+con.commit()
+
+
+pipe = pipeline("summarization", model="Falconsai/text_summarization")
+
+wrapper = textwrap.TextWrapper(width=80, initial_indent='')
 
 def transcribe_audio(input_audio_path, model_path, buffer_size=4000):
     # Load Vosk model
@@ -24,22 +47,35 @@ def transcribe_audio(input_audio_path, model_path, buffer_size=4000):
         if recognizer.AcceptWaveform(audio_data[i:i+buffer_size]):
             result = recognizer.Result()
             transcript += json.loads(result)['text'] + " "
-    
-    # Get final transcription result
+
     final_result = recognizer.FinalResult()
     transcript += json.loads(final_result)['text']
     
-    return transcript
+    wrapped_transcript = wrapper.fill(transcript)
+    
+    return wrapped_transcript
 
-def save_transcript(transcript, filename):
+
+def save_transcript_to_db(transcript, filename):
+    cur.execute("INSERT INTO transcripts (filename, transcript) VALUES (?, ?)", (filename, transcript))
+    con.commit()
+    print(f"Transcript saved to database with filename: {filename}")
+
+
+#def save_transcript(transcript, filename):
      # Define the file path for the transcript
-    transcript_path = os.path.join('transcripts', filename)
+ #   transcript_path = os.path.join('transcripts', filename)
 
-    # Write the transcript to the file
-    with open(transcript_path, 'w') as f:
-        f.write(transcript)
+  #  with open(transcript_path, 'w') as f:
+   #     f.write(transcript)
 
-    print(f"Transcript saved as: {transcript_path}")
+    #print(f"Transcript saved as: {transcript_path}")
+
+def summarize_text(selected_text):
+    summary = pipe(selected_text, max_length=130, min_length=30, do_sample=True)
+    wrapped_summary = wrapper.fill(summary[0]['summary_text'])
+    
+    return wrapped_summary
 
 
 def main():
@@ -52,19 +88,29 @@ def main():
         
         transcript = transcribe_audio(uploaded_file, model_path)
 
-        # Display transcription result in Streamlit
         sl.write("Transcription:")
         sl.text(transcript)
 
-          # Ask the user to input a file name for the transcript
+        #Ask the user to input a file name for the transcript
         transcript_filename = sl.text_input("Enter a name for the transcript file:", "transcript.txt")
 
         if sl.button("Save Transcript"):
-            # Save the transcript to the 'transcripts' folder
-            save_transcript(transcript, transcript_filename)
-            sl.success(f"Transcript saved as: transcripts/{transcript_filename}")
+            save_transcript_to_db(transcript, transcript_filename)
+            sl.success(f"Transcript saved in database as: transcripts/{transcript_filename}")
+
+        selected_text = sl.text_area("Select a block of text to summarize", "")
+        if sl.button("Summarize Text"):
+            if selected_text:
+                summary = summarize_text(selected_text)
+                sl.write("Summary:")
+                sl.text(summary)
+            else:
+                sl.warning("Please select some text")
+
 
 # Call main function
 if __name__ == "__main__":
     main()
+
+con.close()
     
